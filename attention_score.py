@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 
-ROUND_NUM = 1  
+ROUND_NUM = 4  # 0(baseline), 1, 2, ...  
 # ============ CONFIG ============
 IMG_DIR = Path("OFRD/train/image_data")
 

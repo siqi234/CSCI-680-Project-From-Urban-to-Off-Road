@@ -1,20 +1,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, Normalize
-from matplotlib.lines import Line2D        
+from matplotlib.lines import Line2D
 from PIL import Image
 import cv2
 import os
 
-IMG_NAME = '1623464712019'
-ROUND_NUM = 1
+IMG_NAME = '1623170282031'
+ROUND_NUM = 4  # 0(baseline), 1, 2, ...
 # ============ CONFIG ============
-IMG_PATH = f"OFRD/train/image_data/{IMG_NAME}.png"    # original image
+IMG_PATH = f"OFRD/train/image_data/{IMG_NAME}.png"        # original image
+GT_PATH  = f"OFRD/train/gt_image/{IMG_NAME}_fillcolor.png"  # <<< NEW: GT mask path
 
 PROB_PATHS = [
     f"prediction/round{ROUND_NUM}/unet/{IMG_NAME}.npy",        # U-Net prob
-    f"prediction/round{ROUND_NUM}/deeplabv3++/{IMG_NAME}.npy",   # DeepLabV3+ prob
-    f"prediction/round{ROUND_NUM}/segformer/{IMG_NAME}.npy",     # SegFormer prob
+    f"prediction/round{ROUND_NUM}/deeplabv3++/{IMG_NAME}.npy", # DeepLabV3+ prob
+    f"prediction/round{ROUND_NUM}/segformer/{IMG_NAME}.npy",   # SegFormer prob
 ]
 
 ALPHA = 0.6
@@ -37,6 +38,8 @@ LINE_THICKNESS = 4
 COLOR_M1 = (0.0, 0.47, 0.95)   # Blue - U-Net
 COLOR_M2 = (1.0, 0.55, 0.0)    # Orange - DeepLabV3++
 COLOR_M3 = (0.75, 0.1, 0.75)   # Magenta - SegFormer
+
+GT_COLOR = (0.0, 0.0, 0.0)     # <<< NEW: Bright green for GT contour (RGB)
 # ================================
 
 
@@ -119,11 +122,61 @@ def draw_contours_on_top(img, probs, colors, thresh=0.5, thickness=3):
     return img_uint8.astype(np.float32) / 255.0
 
 
+# <<< NEW: load GT mask and draw GT contour on original image >>>
+def load_gt_mask(gt_path, target_shape):
+    """
+    Load GT mask (fillcolor style), resize to target_shape (H, W),
+    and return binary mask {0,1}.
+    """
+    if not os.path.isfile(gt_path):
+        print(f"[WARN] GT mask not found: {gt_path}")
+        return None
+
+    mask = Image.open(gt_path).convert("L")
+    h, w = target_shape
+    mask = mask.resize((w, h), resample=Image.NEAREST)
+    mask_np = np.array(mask)
+    # treat non-zero as drivable
+    mask_bin = (mask_np > 0).astype(np.uint8)
+    return mask_bin
+
+
+def draw_gt_contour_on_img(img, gt_mask, color=(0.0, 1.0, 0.0), thickness=3):
+    """
+    Draw GT contour on top of the original RGB image.
+    img: [H,W,3] float in [0,1]
+    gt_mask: [H,W] uint8 in {0,1}
+    color: RGB tuple in [0,1]
+    """
+    img_uint8 = (img * 255).astype(np.uint8)
+    mask_uint8 = (gt_mask * 255).astype(np.uint8)
+
+    contours, _ = cv2.findContours(
+        mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    # RGB -> BGR
+    bgr = (int(color[2] * 255), int(color[1] * 255), int(color[0] * 255))
+    cv2.drawContours(img_uint8, contours, -1, bgr, thickness)
+
+    return img_uint8.astype(np.float32) / 255.0
+# <<< NEW END >>>
+
+
 def main():
     # ----- load image -----
     img = load_image(IMG_PATH)
     H, W, _ = img.shape
     target_shape = (H, W)
+
+    # ----- load GT & draw GT contour on original image -----
+    gt_mask = load_gt_mask(GT_PATH, target_shape)    # <<< NEW
+    if gt_mask is not None:
+        img_with_gt = draw_gt_contour_on_img(
+            img, gt_mask, color=GT_COLOR, thickness=LINE_THICKNESS
+        )
+    else:
+        img_with_gt = img.copy()
+    # ^ this will be used as the first panel
 
     # ----- load & align probs -----
     probs = load_probs(PROB_PATHS, target_shape)  # [N,H,W]
@@ -206,9 +259,10 @@ def main():
     fig, axes = plt.subplots(1, 5, figsize=(22, 4),
                              gridspec_kw={'width_ratios': [1, 1, 1, 1, 1.05]})
 
-    panels = [img, inc_vis, unc_vis, bc_vis, att_vis]
+    # use img_with_gt for the first panel
+    panels = [img_with_gt, inc_vis, unc_vis, bc_vis, att_vis]
     titles = [
-        "Input Image",
+        "Input Image + GT Contour",
         "Inconsistency (Model Disagreement)",
         "Uncertainty (Entropy of Mean)",
         "Boundary Conflict",
@@ -235,15 +289,15 @@ def main():
         Line2D([0], [0], color=COLOR_M1, lw=2, label=f'U-Net (round {ROUND_NUM})'),
         Line2D([0], [0], color=COLOR_M2, lw=2, label=f'DeepLabV3++ (round {ROUND_NUM})'),
         Line2D([0], [0], color=COLOR_M3, lw=2, label=f'SegFormer (round {ROUND_NUM})'),
+        Line2D([0], [0], color=GT_COLOR, lw=2, label='Ground Truth'),   # <<< NEW
     ]
-    # place it under the panels, centered
     fig.legend(handles=legend_elements,
                loc='lower center',
-               ncol=3,
+               ncol=4,
                bbox_to_anchor=(0.5, -0.02),
                fontsize=10)
 
-    plt.tight_layout(rect=[0, 0.05, 0.9, 1])  # leave a bit of space at bottom for legend
+    plt.tight_layout(rect=[0, 0.05, 0.9, 1])
     plt.show()
 
 
